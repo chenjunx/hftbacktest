@@ -81,6 +81,73 @@ class TestPolymarketSmokeExample(unittest.TestCase):
         self.assertEqual(summary["last_valid_best_ask"], 0.60)
         self.assertEqual(summary["last_valid_mid_price"], 0.50)
 
+    def test_estimates_arrival_depths_from_trade_distance_to_mid(self):
+        module = load_example_module()
+        data = np.array(
+            [
+                (LOCAL_EVENT | BUY_EVENT | DEPTH_EVENT, 100, 110, 0.40, 3.0, 0, 0, 0.0),
+                (LOCAL_EVENT | SELL_EVENT | DEPTH_EVENT, 101, 111, 0.60, 4.0, 0, 0, 0.0),
+                (LOCAL_EVENT | BUY_EVENT | TRADE_EVENT, 102, 112, 0.55, 2.0, 1, 0, 0.0),
+                (LOCAL_EVENT | SELL_EVENT | TRADE_EVENT, 103, 113, 0.45, 1.0, 2, 0, 0.0),
+            ],
+            dtype=EVENT_DTYPE,
+        )
+
+        depths = module.estimate_arrival_depths(data, tick_size=0.01)
+
+        np.testing.assert_allclose(depths, np.array([5.0, 5.0]))
+
+    def test_fits_exponential_intensity_curve(self):
+        module = load_example_module()
+        ticks = np.arange(1, 6, dtype=np.float64)
+        lambda_ = 2.0 * np.exp(-0.4 * ticks)
+
+        fit = module.fit_exponential_intensity(ticks, lambda_)
+
+        self.assertAlmostEqual(fit["A"], 2.0, places=6)
+        self.assertAlmostEqual(fit["k"], 0.4, places=6)
+        self.assertAlmostEqual(fit["r2"], 1.0, places=6)
+
+    def test_cli_estimates_as_intensity_and_writes_plot(self):
+        data = np.array(
+            [
+                (LOCAL_EVENT | BUY_EVENT | DEPTH_EVENT, 100, 110, 0.40, 3.0, 0, 0, 0.0),
+                (LOCAL_EVENT | SELL_EVENT | DEPTH_EVENT, 101, 111, 0.60, 4.0, 0, 0, 0.0),
+                (LOCAL_EVENT | BUY_EVENT | TRADE_EVENT, 200, 210, 0.55, 2.0, 1, 0, 0.0),
+                (LOCAL_EVENT | SELL_EVENT | TRADE_EVENT, 300, 310, 0.45, 1.0, 2, 0, 0.0),
+                (LOCAL_EVENT | BUY_EVENT | TRADE_EVENT, 400, 410, 0.56, 1.0, 3, 0, 0.0),
+            ],
+            dtype=EVENT_DTYPE,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.npz"
+            plot = Path(tmp) / "intensity.png"
+            np.savez_compressed(path, data=data)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(EXAMPLE),
+                    str(path),
+                    "--estimate-as",
+                    "--tick-size",
+                    "0.01",
+                    "--max-ticks",
+                    "10",
+                    "--plot",
+                    str(plot),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn("AS/GLFT intensity estimate:", result.stdout)
+            self.assertIn("samples:", result.stdout)
+            self.assertIn("A:", result.stdout)
+            self.assertIn("k:", result.stdout)
+            self.assertTrue(plot.exists())
+            self.assertGreater(plot.stat().st_size, 0)
+
     def test_cli_prints_summary_for_npz_file(self):
         data = np.array(
             [
